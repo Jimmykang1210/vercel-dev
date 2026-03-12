@@ -1,27 +1,28 @@
-const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
+const OPENAI_API = "https://api.openai.com/v1/chat/completions";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    res.status(405).json({ error: "Method not allowed" });
+    res.status(405).json({ error: { message: "Method not allowed" } });
     return;
   }
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    res.status(500).json({ error: { message: "ANTHROPIC_API_KEY is not configured" } });
+    res.status(500).json({ error: { message: "OPENAI_API_KEY is not configured" } });
     return;
   }
 
   try {
     const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
-    const response = await fetch(ANTHROPIC_API, {
+    const { model = "gpt-4o", messages, max_tokens = 4000 } = body;
+
+    const response = await fetch(OPENAI_API, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
+        Authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ model, messages, max_tokens }),
     });
 
     const data = await response.json().catch(() => ({}));

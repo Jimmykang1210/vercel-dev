@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 
-const CLAUDE_API = "/api/claude";
+const OPENAI_API = "/api/openai";
+const FETCH_PAGE_API = "/api/fetch-page";
 
 // ── Prompts ──────────────────────────────────────────────────────────────────
 
@@ -40,9 +41,7 @@ Return ONLY this raw JSON (no markdown, no backticks):
 }
 ALL Korean fields (description, fix, keyChanges, aiCitationTips, competitorGap) must be in Korean.`;
 
-const FETCH_PROMPT = `You are a web content extractor. Use web_search to fetch the URL and extract its main content.
-Return ONLY raw JSON (no markdown, no backticks):
-{"title": "page title", "content": "main article text and headings, no nav/footer/ads, max 3000 chars"}`;
+// URL 콘텐츠 추출은 /api/fetch-page에서 서버 측 fetch + OpenAI로 처리
 
 const categoryInfo = {
   clarity: {
@@ -118,23 +117,39 @@ function extractJson(raw) {
   return JSON.parse(fragment);
 }
 
-async function callClaude({ system, userMessage, useWebSearch = false, maxTokens = 4000 }) {
-  const tools = useWebSearch ? [{ type: "web_search_20250305", name: "web_search" }] : undefined;
-  let messages = [{ role: "user", content: userMessage }];
-  for (let i = 0; i < 8; i++) {
-    const body = { model: "claude-sonnet-4-20250514", max_tokens: maxTokens, system, messages };
-    if (tools) body.tools = tools;
-    const res = await fetch(CLAUDE_API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `HTTP ${res.status}`); }
-    const data = await res.json();
-    const content = data.content || [];
-    const textBlocks = content.filter(b => b.type === "text").map(b => b.text);
-    const toolUse = content.filter(b => b.type === "tool_use");
-    if (toolUse.length === 0 || data.stop_reason === "end_turn") return textBlocks.join("");
-    messages = [...messages, { role: "assistant", content },
-      { role: "user", content: toolUse.map(tu => ({ type: "tool_result", tool_use_id: tu.id, content: "Search done. Now return the JSON." })) }];
+async function callOpenAI({ system, userMessage, maxTokens = 4000 }) {
+  const res = await fetch(OPENAI_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: userMessage },
+      ],
+      max_tokens: maxTokens,
+    }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e?.error?.message || `HTTP ${res.status}`);
   }
-  throw new Error("반복 횟수 초과");
+  const data = await res.json();
+  return data.choices?.[0]?.message?.content ?? "";
+}
+
+async function fetchPageContent(url) {
+  const res = await fetch(FETCH_PAGE_API, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e?.error?.message || `HTTP ${res.status}`);
+  }
+  const { raw } = await res.json();
+  return raw;
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -313,7 +328,7 @@ export default function AEOOptimizer() {
     const isFree = plan === "free";
     const prompt = isFree ? FREE_PROMPT : PRO_PROMPT;
     const maxTokens = isFree ? 2000 : 5000;
-    const raw = await callClaude({
+    const raw = await callOpenAI({
       system: prompt,
       userMessage: `분석 대상:\n\n제목: ${title}\n${sourceUrl ? `URL: ${sourceUrl}\n` : ""}내용:\n${content}`,
       maxTokens,
@@ -342,16 +357,11 @@ export default function AEOOptimizer() {
         let cleanUrl = target;
         if (!/^https?:\/\//i.test(cleanUrl)) cleanUrl = "https://" + cleanUrl;
 
-        // Phase 1: fetch
+        // Phase 1: fetch (서버에서 URL 가져와 OpenAI로 본문 추출)
         startProgress(40, "웹페이지 접속 및 콘텐츠 추출 중...", fetchDur);
-        const fetchedRaw = await callClaude({
-          system: FETCH_PROMPT,
-          userMessage: `이 URL의 콘텐츠를 추출해주세요: ${cleanUrl}`,
-          useWebSearch: true,
-          maxTokens: 3000,
-        });
+        const fetchedRaw = await fetchPageContent(cleanUrl);
         let pageData = { title: cleanUrl, content: fetchedRaw };
-        try { pageData = extractJson(fetchedRaw); } catch (_) { pageData.content = fetchedRaw.slice(0, 3000); }
+        try { pageData = extractJson(fetchedRaw); } catch (_) { pageData.content = (typeof fetchedRaw === "string" ? fetchedRaw : "").slice(0, 3000); }
         pageContent = pageData.content;
         pageTitle = pageData.title || cleanUrl;
         setFetchedTitle(pageTitle);
