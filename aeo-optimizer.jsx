@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 
-const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
+const CLAUDE_API = "/api/claude";
 
 // ── Prompts ──────────────────────────────────────────────────────────────────
 
@@ -124,7 +124,7 @@ async function callClaude({ system, userMessage, useWebSearch = false, maxTokens
   for (let i = 0; i < 8; i++) {
     const body = { model: "claude-sonnet-4-20250514", max_tokens: maxTokens, system, messages };
     if (tools) body.tools = tools;
-    const res = await fetch(ANTHROPIC_API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const res = await fetch(CLAUDE_API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e?.error?.message || `HTTP ${res.status}`); }
     const data = await res.json();
     const content = data.content || [];
